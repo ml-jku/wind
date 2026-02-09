@@ -1,0 +1,5 @@
+defaults:
+  - default
+
+data_dir: ${paths.root_dir}/data/weatherbench2/datasets/era5/1959-2022-6h-240x121_equiangular_with_poles_conservative.zarr
+stats_path: ${paths.root_dir}/src/datasets/stats/1959-2022-6h-240x121_equiangular_with_poles_conservative_stats.pkl

@@ -1,0 +1,2 @@
+extract_rollout_data:
+  _target_: src.callbacks.extract_rollout_data.ExtractRolloutData

@@ -1,0 +1,4 @@
+forecast_statistics:
+  _target_: src.modules.callbacks.ForecastStatistics
+  n_spatial_dims: ${n_spatial_dims}
+  n_steps: ${n_forecast_timesteps}

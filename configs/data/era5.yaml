@@ -1,0 +1,22 @@
+_target_: src.datasets.era5.ERA5DataModule
+data_dir_local: null
+data_dir_global: ${paths.data_dir}
+stats_path: ${paths.stats_path}
+n_timesteps: ${n_timesteps}
+batch_size: 8
+num_workers: 8
+persistent_workers: true
+pin_memory: true
+prefetch_factor: 2
+seed: 42
+shuffle: true
+hours_train: [0,6,12,18]
+hours_val: [0,6,12,18]
+stride_train: 1
+stride_val: 1
+fields: ${fields}
+n_forecast_timesteps: 31 # Hardcoded because we need one more to have 7 full windows
+timespan_train: ${timespan_train}
+timespan_val: ${timespan_val}
+n_forecasts: 64
+add_day_year_progress: true

@@ -1,0 +1,8 @@
+defaults:
+  - model_summary
+  - rich_progress_bar
+  - extract_forecast_data
+  - _self_
+
+model_summary:
+  max_depth: -1

@@ -1,0 +1,2 @@
+extract_forecast_data:
+  _target_: src.modules.callbacks.ExtractForecastData

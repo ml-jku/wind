@@ -1,0 +1,18 @@
+# @package _global_
+
+defaults:
+  - default
+
+trainer:
+  accelerator: cpu
+  devices: 1
+
+# Disable lr scheduler
+callbacks:
+  config_lr_scheduler: null
+  learning_rate_monitor: null
+model:
+  scheduler: null
+
+data:
+  batch_size: 2

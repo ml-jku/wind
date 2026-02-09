@@ -1,0 +1,34 @@
+# @package _global_
+
+defaults:
+  - /experiment/era5/train/default
+  - override /model: era5/uvit
+
+independent_noise_dim: 1
+remove_noise_cond: true
+field_channels: 70
+n_timesteps: 5
+n_forecast_timesteps: 5
+
+model:
+  diff_var_channel_weights: 6h_diff_std
+
+fields:
+  - temperature # 13
+  - geopotential # 13
+  - specific_humidity # 13
+  - u_component_of_wind # 13
+  - v_component_of_wind # 13
+  - 2m_temperature # 1
+  - mean_sea_level_pressure # 1
+  - 10m_u_component_of_wind # 1
+  - 10m_v_component_of_wind # 1
+  - total_precipitation_6hr # 1
+
+data:
+  hours_train: [0,6,12,18]
+  hours_val: [0,6,12,18]
+  stride_train: 1
+  stride_val: 1
+
+tags: ["wind"]

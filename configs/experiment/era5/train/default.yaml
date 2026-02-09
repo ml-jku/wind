@@ -1,0 +1,38 @@
+# @package _global_
+
+defaults:
+  - override /data: era5
+  - override /paths: era5
+
+n_timesteps: 5
+n_forecast_timesteps: 5
+n_spatial_dims: 2
+field_channels: 70
+timespan_train: ["1959-01-01", "2020-12-31"]
+timespan_val: ["2021-01-01", "2021-12-31"]
+n_ensembles: 5
+
+noise_distribution:
+  _target_: src.modules.fast_fm.sample.distribution.GaussianInitialDistribution
+  mean: 0.0
+  std: 1.0
+
+logger:
+  wandb:
+    name: uvit-df
+    project: era5
+
+tags: []
+
+trainer:
+  max_epochs: 60
+  num_sanity_val_steps: 0
+  log_every_n_steps: 15
+  check_val_every_n_epoch: 1
+  gradient_clip_val: 0.8
+  precision: bf16-mixed
+
+callbacks:
+  model_checkpoint:
+    monitor: val/mse_50_temperature
+    mode: min

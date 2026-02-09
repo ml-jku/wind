@@ -1,0 +1,19 @@
+# @package _global_
+
+defaults:
+  - default
+
+trainer:
+  accelerator: gpu
+  devices: 1
+
+# Disable lr scheduler
+callbacks:
+  config_lr_scheduler: null
+  learning_rate_monitor: null
+model:
+  scheduler: null
+
+# logger:
+#   wandb:
+#     name: debug

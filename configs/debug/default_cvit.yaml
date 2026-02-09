@@ -1,0 +1,48 @@
+# @package _global_
+
+task_name: debug
+
+callbacks: null
+
+extras:
+  ignore_warnings: False
+  enforce_tags: False
+
+hydra:
+  job_logging:
+    root:
+      level: DEBUG
+  job:
+    env_set:
+      DEBUG: 1
+
+logger: null
+
+# logger:
+#   wandb:
+#     name: debug
+
+trainer:
+  log_every_n_steps: 1
+  check_val_every_n_epoch: 50
+  # overfit_batches: 1
+  deterministic: True
+  num_sanity_val_steps: 0
+  max_epochs: 100000
+  enable_checkpointing: False
+  #detect_anomaly: true
+  accelerator: cpu
+  devices: 1
+
+data:
+  num_workers: 0
+  pin_memory: False
+  persistent_workers: False
+  batch_size: 4
+  num_query_points: 10
+  prefetch_factor: null
+
+model:
+  compile: false
+
+log_grads: True

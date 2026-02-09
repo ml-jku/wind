@@ -1,0 +1,40 @@
+# @package _global_
+
+task_name: debug
+
+extras:
+  ignore_warnings: False
+  enforce_tags: False
+
+hydra:
+  job_logging:
+    root:
+      level: DEBUG
+  job:
+    env_set:
+      DEBUG: 1
+      RAND_IDX_RANGE: 60
+
+logger: null
+num_samples: 2
+
+trainer:
+  log_every_n_steps: 1
+  check_val_every_n_epoch: 10
+  num_sanity_val_steps: 1
+  max_epochs: 100_000
+  limit_val_batches: 1
+  overfit_batches: 1
+
+data:
+  batch_size: 2
+  num_workers: 1
+  pin_memory: True
+  persistent_workers: True
+  prefetch_factor: 1
+
+
+model:
+  compile: false
+
+log_grads: False

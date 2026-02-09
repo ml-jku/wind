@@ -1,0 +1,33 @@
+# @package _global_
+
+defaults:
+  - _self_
+  - logger: wandb
+  - trainer: gpu
+  - paths: the-well
+  - extras: default
+  - hydra: default
+  - data: the-well-rb
+  - experiment: null
+  - optional local: default
+
+task_name: eval
+seed: 0
+tags: ["eval"]
+ckpt_path: null
+
+logger:
+  wandb:
+    name: eval_${eval.wandb_run_id}
+    project: ${eval.wandb_project}
+    offline: true
+
+data:
+  batch_size: 2
+  dataset:
+    start: 16
+
+trainer:
+  devices: 1
+  accelerator: gpu
+  inference_mode: false

@@ -1,0 +1,83 @@
+_target_: src.wrappers.one_stage.era5.wind.Wind
+_recursive_: False
+compile: true
+n_spatial_dims: ${n_spatial_dims}
+n_forecast_timesteps: ${n_forecast_timesteps}
+n_ensembles: ${n_ensembles}
+monitor: val/mse_time_mean
+interval: step
+independent_noise_dim: ${independent_noise_dim}
+channel_names: ${fields}
+use_area_weights: true
+use_channel_weights: true
+stats_path: ${paths.stats_path}
+
+backbone:
+  _target_: src.models.dfot.uvit.uvit3d.UViT3DV2
+  x_shape: [70, 128, 240]
+  additional_inputs: 10
+  max_tokens: ${n_timesteps}
+  remove_noise_cond: ${remove_noise_cond}
+  identity_init: false
+  init_weights: false
+  drop_bias: false
+
+  cfg:
+    channels: [256, 512, 1024, 2048]
+    emb_channels: 64
+    patch_size: 2
+    block_types: ["ResBlock", "ResBlock", "TransformerBlock", "TransformerBlock"]
+    block_dropouts: [0.0, 0.0, 0.0, 0.0]
+    num_updown_blocks: [4, 4, 4]
+    num_mid_blocks: 4
+    num_heads: 4
+    pos_emb_type: rope
+    use_checkpointing: [false, false, false, false]
+
+timestep_sampler:
+  _target_: src.modules.azula_tools.timestep_sampler.UniformTimestepSampler
+
+denoiser:
+  _target_: src.modules.azula_tools.custom_denoiser.FlexGaussianDenoiser
+  _partial_: True
+  target: data
+  schedule:
+    _target_: azula.noise.RectifiedSchedule
+  reduction: none # for area weighting
+
+forecast_strategy:
+  _target_: src.modules.azula_tools.forecast.InpaintForecast
+  window_size: ${n_timesteps}
+  overlap: 1
+  sampler:
+    _target_: azula.sample.DDIMSampler
+    _partial_: True
+    steps: 15
+
+optimizer:
+  _target_: heavyball.ForeachAdamW
+  _partial_: True
+  lr: 2e-4
+  weight_decay: 0.0
+
+ema:
+  _target_: src.modules.ema.ExponentialMovingAverage
+  _partial_: True
+  decay: 0.999
+
+scheduler:
+  _target_: src.modules.schedulers.LinearWarmupCosineAnnealingLR
+  _partial_: True
+  warmup_epochs: 5
+  max_epochs: ${trainer.max_epochs}
+  min_lr: 1e-6
+
+val_field_names:
+  - 850_temperature
+  - 2m_temperature
+  - 50_temperature
+  - 10m_u_component_of_wind
+  - 500_geopotential
+  - mean_sea_level_pressure
+  - 700_specific_humidity
+  - 1000_specific_humidity
