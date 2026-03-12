@@ -10,8 +10,8 @@ independent_noise_dim: ${independent_noise_dim}
 channel_names: ${fields}
 use_area_weights: true
 use_channel_weights: true
-stats_path: ${paths.stats_path}
-
+stats_path: ${paths.root_dir}/src/datasets/stats/1959-2022-6h-240x121_equiangular_with_poles_conservative_stats.pkl
+era5_spatial_resolution: 1.5
 backbone:
   _target_: src.models.dfot.uvit.uvit3d.UViT3DV2
   x_shape: [70, 128, 240]
@@ -54,11 +54,22 @@ forecast_strategy:
     _partial_: True
     steps: 15
 
+# optimizer:
+#   _target_: heavyball.ForeachAdamW
+#   _partial_: True
+#   lr: 5e-5
+#   weight_decay: 0.0
+
 optimizer:
-  _target_: heavyball.ForeachAdamW
+  _target_: src.utils.optimizer.MuonWithAdamW
   _partial_: True
-  lr: 2e-4
-  weight_decay: 0.0
+  adam_betas: [0.9,0.95]
+  adam_weight_decay: 0
+  lr: 0.01
+  lr_ratio: 0.015
+  muon_momentum: 0.95
+  muon_nesterov: True
+  ns_steps: 5
 
 ema:
   _target_: src.modules.ema.ExponentialMovingAverage

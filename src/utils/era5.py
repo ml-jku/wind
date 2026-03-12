@@ -6,6 +6,10 @@ import torch
 import xarray
 from einops import rearrange
 
+from src.utils.pylogger import RankedLogger
+
+log = RankedLogger(__name__, rank_zero_only=True)
+
 ATHMOSPHERIC_CHANNEL_NAMES = [
     "temperature",
     "geopotential",
@@ -119,7 +123,8 @@ def load_stats(
             try:
                 diff_std = torch.as_tensor(stats[f][diff_var_channel_weights].values)
             except KeyError:
-                print(f"KeyError: {diff_var_channel_weights} not found for {f}")
+                log.warning(f"KeyError: {diff_var_channel_weights} not found for {f}")
+                continue
             if diff_std.ndim in [0, 2]:
                 diff_std = diff_std.unsqueeze(0)
             all_diff_std.append(diff_std)

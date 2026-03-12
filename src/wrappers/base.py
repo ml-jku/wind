@@ -43,13 +43,14 @@ class WrapperBase(L.LightningModule):
         # model.state_dict() contains references to model weights rather
         # than copies. Therefore, we need to clone them before calling
         # load_state_dict().
-        print("Loading EMA weights")
-        clone_param = lambda t: t.detach().clone()
+        log.info("Loading EMA weights")
+        def clone_param(t):
+            return t.detach().clone()
         self.cached_weights = tensor_tree_map(clone_param, self.state_dict())
         self.load_state_dict(self.ema.state_dict()["params"])
 
     def restore_cached_weights(self):
-        print("Restoring cached weights")
+        log.info("Restoring cached weights")
         if self.cached_weights is not None:
             self.load_state_dict(self.cached_weights)
             self.cached_weights = None
@@ -86,7 +87,7 @@ class WrapperBase(L.LightningModule):
             self.restore_cached_weights()
 
     def on_load_checkpoint(self, checkpoint):
-        print(f"Loading EMA state dict from checkpoint {checkpoint['epoch']}")
+        log.info(f"Loading EMA state dict from checkpoint {checkpoint['epoch']}")
         if self.hparams.ema is not None:
             self.ema = instantiate(self.hparams.ema)(model=self)
             self.ema.load_state_dict(checkpoint["ema"])
@@ -136,7 +137,6 @@ class WrapperBase(L.LightningModule):
 
 
 class RollingWrapperBase(WrapperBase):
-
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
@@ -233,7 +233,6 @@ class RollingWrapperBase(WrapperBase):
             ground_truth_fields = getattr(self, f"{split}_ground_truth_fields")
 
             if len(forecast_fields) > 0:
-
                 forecast_fields = torch.cat(forecast_fields)
                 ground_truth_fields = torch.cat(ground_truth_fields)
 

@@ -577,6 +577,125 @@ class TransformerBlock(nn.Module):
         return x
 
 
+class FactorizedTransformerBlock(nn.Module):
+    """
+    Factorized spatiotemporal transformer block.
+
+    Instead of full 3D attention over T*H*W tokens, applies:
+      1. Spatial self-attention over H*W tokens (independently per timestep).
+      2. Position-wise MLP.
+      3. Temporal self-attention over T tokens (independently per spatial position).
+
+    Complexity: O(T*(H*W)^2 + H*W*T^2) vs O((T*H*W)^2) for full attention.
+    Suitable for high-resolution inputs (e.g. 0.25° ERA5).
+
+    Input/output shape: (B*T, C, H, W).
+    The embedding `emb` has shape (B*T, emb_dim).
+    """
+
+    def __init__(
+        self,
+        dim: int,
+        heads: int,
+        emb_dim: int,
+        dropout: float,
+        temporal_length: int,
+        rope: Optional["AxialRotaryEmbedding"] = None,
+    ):
+        super().__init__()
+        self.temporal_length = temporal_length
+        self.heads = heads
+        dim_head = dim // heads
+        mlp_dim = 4 * dim
+
+        # Spatial self-attention
+        self.spatial_norm = NormalizeWithCond(dim, emb_dim)
+        self.spatial_qkv = nn.Linear(dim, dim * 3, bias=False)
+        self.spatial_q_norm = Normalize(dim_head)
+        self.spatial_k_norm = Normalize(dim_head)
+        self.spatial_out = zero_module(nn.Linear(dim, dim, bias=True))
+        self.spatial_rope = rope.ax2 if rope is not None else None
+
+        # Position-wise MLP (between spatial and temporal)
+        self.mlp_norm = NormalizeWithCond(dim, emb_dim)
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, mlp_dim, bias=True),
+            nn.SiLU(),
+            nn.Dropout(dropout),
+            zero_module(nn.Linear(mlp_dim, dim, bias=True)),
+        )
+
+        # Temporal self-attention
+        self.temporal_norm = NormalizeWithCond(dim, emb_dim)
+        self.temporal_qkv = nn.Linear(dim, dim * 3, bias=False)
+        self.temporal_q_norm = Normalize(dim_head)
+        self.temporal_k_norm = Normalize(dim_head)
+        self.temporal_out = zero_module(nn.Linear(dim, dim, bias=True))
+        self.temporal_rope = rope.ax1 if rope is not None else None
+
+    def _spatial_attn(self, x: Tensor, emb: Tensor) -> Tensor:
+        """x: (B*T, H*W, C), emb: (B*T, 1, emb_dim) — broadcasts over H*W."""
+        _x = x
+        x = self.spatial_norm(x, emb)
+        qkv = rearrange(
+            self.spatial_qkv(x), "b n (qkv h d) -> qkv b h n d", qkv=3, h=self.heads
+        ).contiguous()
+        q, k, v = qkv.unbind(0)
+        q, k = self.spatial_q_norm(q), self.spatial_k_norm(k)
+        if self.spatial_rope is not None:
+            q, k = self.spatial_rope(q), self.spatial_rope(k)
+        # pylint: disable-next=not-callable
+        out = F.scaled_dot_product_attention(q, k, v)
+        out = rearrange(out, "b h n d -> b n (h d)").contiguous()
+        return _x + self.spatial_out(out)
+
+    def _temporal_attn(self, x: Tensor, emb: Tensor) -> Tensor:
+        """x: (B*H*W, T, C), emb: (B*H*W, T, emb_dim)."""
+        _x = x
+        x = self.temporal_norm(x, emb)
+        qkv = rearrange(
+            self.temporal_qkv(x), "b n (qkv h d) -> qkv b h n d", qkv=3, h=self.heads
+        ).contiguous()
+        q, k, v = qkv.unbind(0)
+        q, k = self.temporal_q_norm(q), self.temporal_k_norm(k)
+        if self.temporal_rope is not None:
+            q, k = self.temporal_rope(q), self.temporal_rope(k)
+        # pylint: disable-next=not-callable
+        out = F.scaled_dot_product_attention(q, k, v)
+        out = rearrange(out, "b h n d -> b n (h d)").contiguous()
+        return _x + self.temporal_out(out)
+
+    def forward(self, x: Tensor, emb: Tensor) -> Tensor:
+        """
+        Args:
+            x:   (B*T, C, H, W)
+            emb: (B*T, emb_dim)
+        Returns:
+            (B*T, C, H, W)
+        """
+        B_T, _C, H, W = x.shape
+        T = self.temporal_length
+
+        # --- Spatial attention (each timestep attends over H*W independently) ---
+        x_s = rearrange(x, "bt c h w -> bt (h w) c")
+        emb_s = emb.unsqueeze(1)  # (B*T, 1, emb_dim) — broadcasts over sequence
+        x_s = self._spatial_attn(x_s, emb_s)
+        x_s = x_s + self.mlp(self.mlp_norm(x_s, emb_s))
+        x = rearrange(x_s, "bt (h w) c -> bt c h w", h=H, w=W)
+
+        # --- Temporal attention (each spatial position attends over T independently) ---
+        x_t = rearrange(x, "(b t) c h w -> (b h w) t c", t=T)
+        emb_t = repeat(
+            rearrange(emb, "(b t) d -> b t d", t=T),
+            "b t d -> (b hw) t d",
+            hw=H * W,
+        )
+        x_t = self._temporal_attn(x_t, emb_t)
+        x = rearrange(x_t, "(b h w) t c -> (b t) c h w", h=H, w=W)
+
+        return x
+
+
 class Downsample(nn.Module):
     """
     Downsample block for U-ViT.

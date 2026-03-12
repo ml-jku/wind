@@ -3,6 +3,7 @@
 defaults:
   - /experiment/era5/train/default
   - override /model: era5/uvit
+  - override /data: era5_0p25deg
 
 independent_noise_dim: 1
 remove_noise_cond: true
@@ -12,23 +13,27 @@ n_forecast_timesteps: 5
 
 model:
   diff_var_channel_weights: 6h_diff_std
+  era5_spatial_resolution: 0.25
+  backbone:
+    x_shape: [70, 704, 1440]
+    cfg:
+      patch_size: 4
 
 fields:
-  - temperature # 13
-  - geopotential # 13
-  - specific_humidity # 13
-  - u_component_of_wind # 13
-  - v_component_of_wind # 13
+  - temperature # 13 pressure levels
+  - geopotential # 13 pressure levels
+  - specific_humidity # 13 pressure levels
+  - u_component_of_wind # 13 pressure levels
+  - v_component_of_wind # 13 pressure levels
   - 2m_temperature # 1
   - mean_sea_level_pressure # 1
   - 10m_u_component_of_wind # 1
   - 10m_v_component_of_wind # 1
   - total_precipitation_6hr # 1
 
-data:
-  hours_train: [0,6,12,18]
-  hours_val: [0,6,12,18]
-  stride_train: 1
-  stride_val: 1
-
 tags: ["wind"]
+
+logger:
+  wandb:
+    name: uvit-df
+    project: era5_0p25deg

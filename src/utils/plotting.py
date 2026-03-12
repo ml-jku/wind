@@ -76,7 +76,7 @@ def rapsd(field, d=1.0):
     radial_profile = tbin / nr
 
     # 5. Get frequencies (optional, matches pysteps return)
-    freqs = fft.fftfreq(max(h, w), d)[: len(radial_profile)]
+    fft.fftfreq(max(h, w), d)[: len(radial_profile)]
 
     return radial_profile
 
@@ -716,7 +716,7 @@ def spatial_spectral_density_multi(
 
     # Labels
     if labels is None:
-        labels = [f"Series {i+1}" for i in range(len(datasets))]
+        labels = [f"Series {i + 1}" for i in range(len(datasets))]
     elif len(labels) != len(datasets):
         raise ValueError("Length of 'labels' must match number of datasets.")
 
@@ -802,7 +802,7 @@ def latitudinal_mean_multi(
 
     # Labels
     if labels is None:
-        labels = [f"Series {i+1}" for i in range(len(series))]
+        labels = [f"Series {i + 1}" for i in range(len(series))]
     elif len(labels) != len(series):
         raise ValueError("Length of 'labels' must match number of datasets.")
 
@@ -879,7 +879,7 @@ def longitudinal_mean_multi(
 
     # Labels
     if labels is None:
-        labels = [f"Series {i+1}" for i in range(len(series))]
+        labels = [f"Series {i + 1}" for i in range(len(series))]
     elif len(labels) != len(series):
         raise ValueError("Length of 'labels' must match number of datasets.")
 
@@ -932,7 +932,7 @@ def histograms_multi(
 
     # Labels
     if labels is None:
-        labels = [f"Series {i+1}" for i in range(len(flat))]
+        labels = [f"Series {i + 1}" for i in range(len(flat))]
     elif len(labels) != len(flat):
         raise ValueError("Length of 'labels' must match number of datasets.")
 

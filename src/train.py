@@ -19,7 +19,7 @@ allow_ops_in_compiled_graph()
 torch.set_float32_matmul_precision("high")
 
 OmegaConf.register_new_resolver("eval", eval)
-rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
+rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True, dotenv=True)
 
 # This is hacky but the problem is when using hydra with ddp and multirun
 # that an argument error happens.

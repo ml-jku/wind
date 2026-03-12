@@ -15,7 +15,6 @@ from .utils import compose_forecast, compute_n_forecasts, extract_frames
 
 
 class ForecastBase(ABC):
-
     def __init__(
         self,
         window_size: int = 5,

@@ -1,0 +1,27 @@
+_target_: src.datasets.era5.ERA5DataModule
+data_dir_local: ${oc.env:ERA5_0P25DEG_PATH,null}
+data_dir_global: gs://weatherbench2/datasets/era5/1959-2022-6h-1440x721.zarr
+stats_path: ${paths.root_dir}/src/datasets/stats/1959-2022-6h-240x121_equiangular_with_poles_conservative_stats.pkl
+n_timesteps: ${n_timesteps}
+# At 0.25° a single sample is ~1.45 GB (5 ts × 70 ch × 1440 × 704 × float32).
+# num_workers × prefetch_factor × batch_size ≈ 4 × 2 × 2 = ~23 GB host RAM per GPU
+# in the prefetch queue — scale num_workers down if RAM is limited.
+batch_size: 2
+num_workers: 4
+persistent_workers: true
+pin_memory: true
+prefetch_factor: 2
+seed: 42
+shuffle: true
+hours_train: [0,6,12,18]
+hours_val: [0,6,12,18]
+stride_train: 1
+stride_val: 1
+fields: ${fields}
+n_forecast_timesteps: 31
+timespan_train: ${timespan_train}
+timespan_val: ${timespan_val}
+n_forecasts: 64
+add_day_year_progress: true
+# 0.25°-specific: one timestep per dask chunk (~285 MB vs ~2.3 GB at chunk=8)
+time_chunk_size: 1

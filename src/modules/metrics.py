@@ -976,7 +976,7 @@ class CRPSTimeOptimized(MetricBase):
                 "targets must be (b, t, c, ...spatial) with the same spatial dims as preds"
             )
 
-        b, m = preds.shape[0], preds.shape[1]
+        _b, m = preds.shape[0], preds.shape[1]
 
         # Check for M < 2 only if using unbiased estimator which divides by M-1
         if self.estimator == "erdm" and m < 2:
@@ -1191,7 +1191,7 @@ class CRPSGenCastTime(MetricBase):
                 "targets must be (b, t, c, ...spatial) with the same spatial dims as preds"
             )
 
-        b, m = preds.shape[0], preds.shape[1]
+        _b, m = preds.shape[0], preds.shape[1]
         spatial_dims = tuple(range(-self.n_spatial_dims, 0))
 
         # --- Term 1: Mean Absolute Error ---

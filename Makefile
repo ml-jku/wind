@@ -16,6 +16,12 @@ clean-logs: ## Clean logs
 format: ## Run pre-commit hooks
 	pre-commit run -a
 
+lint: ## Run ruff linter
+	uv run ruff check
+
+typecheck: ## Run pyright type checker
+	uv run pyright
+
 sync: ## Merge changes from main branch to your current branch
 	git pull
 	git pull origin main

@@ -2,9 +2,11 @@ from typing import Literal, Tuple
 
 import torch
 import torch.nn.functional as F
-from azula.denoise import Denoiser, GaussianDenoiser, GaussianPosterior
+from azula.denoise import Denoiser, DiracPosterior, GaussianDenoiser, GaussianPosterior
 from azula.noise import RectifiedSchedule, Schedule
 from torch import BoolTensor, Tensor, nn
+
+from src.modules.azula_tools.utils import get_module_dtype
 
 
 class FlexGaussianDenoiser(Denoiser):
@@ -148,3 +150,111 @@ class InpaintDenoiser(Denoiser):
             t = torch.where(t_mask, 0, t)
 
         return self.denoiser(x_s, t, **kwargs)
+
+
+# Adapted from azula.denoise.KarrasDenoiser
+class CustomKarrasDenoiser(Denoiser):
+    r"""Creates a Gaussian denoiser with EDM-style preconditioning.
+
+    .. math:: \mu_\phi(x_t) = c_\mathrm{skip}(t) \, x_t +
+        c_\mathrm{out}(t) \, b_\phi(c_\mathrm{in}(t) \, x_t, c_\mathrm{time}(t))
+
+    The preconditioning coefficients are generalized to take the scale :math:`\alpha_t`
+    into account.
+
+    .. math::
+        c_\mathrm{in}(t) & = \frac{1}{\sqrt{\alpha_t^2 + \sigma_t^2}} \\
+        c_\mathrm{out}(t) & = \frac{\sigma_t}{\sqrt{\alpha_t^2 + \sigma_t^2}} \\
+        c_\mathrm{skip}(t) & = \frac{\alpha_t}{\alpha_t^2 + \sigma_t^2} \\
+        c_\mathrm{time}(t) & = \log \frac{\sigma_t}{\alpha_t}
+
+    References:
+        | Elucidating the Design Space of Diffusion-Based Generative Models (Karras et al., 2022)
+        | https://arxiv.org/abs/2206.00364
+
+    Arguments:
+        backbone: A noise/time conditional network :math:`b_\phi(x_t, t)`.
+        schedule: A noise schedule.
+    """
+
+    def __init__(
+        self,
+        backbone: nn.Module,
+        schedule: Schedule,
+        reduction: Literal["mean", "sum", "none"] = "none",
+    ):
+        super().__init__()
+
+        self.backbone = backbone
+        self.schedule = schedule
+        self.reduction = reduction
+
+    def forward(self, x_t: Tensor, t: Tensor, **kwargs) -> DiracPosterior:
+        r"""
+        Arguments:
+            x_t: A noisy tensor :math:`x_t`, with shape :math:`(B, *)`.
+            t: The time :math:`t`, with shape :math:`()` or :math:`(B)`.
+            kwargs: Optional keyword arguments.
+
+        Returns:
+            The Dirac delta :math:`\delta(X - \mu_\phi(x_t))`.
+        """
+
+        alpha_t, sigma_t = self.schedule(t)
+
+        while alpha_t.ndim < x_t.ndim:
+            alpha_t, sigma_t = alpha_t[..., None], sigma_t[..., None]
+
+        c_in = torch.rsqrt(alpha_t**2 + sigma_t**2)
+        c_out = sigma_t * torch.rsqrt(alpha_t**2 + sigma_t**2)
+        c_skip = alpha_t / (alpha_t**2 + sigma_t**2)
+        c_time = torch.log(sigma_t / alpha_t).reshape_as(t)
+
+        dtype = get_module_dtype(self.backbone)
+
+        output = self.backbone(
+            (c_in * x_t).to(dtype),
+            c_time.to(dtype),
+            **kwargs,
+        ).to(x_t)
+
+        mean = c_skip * x_t + c_out * output
+
+        return DiracPosterior(mean=mean)
+
+    def loss(self, x: Tensor, t: Tensor, **kwargs) -> Tensor:
+        r"""
+        Arguments:
+            x: A clean tensor :math:`x`, with shape :math:`(B, *)`.
+            t: The time :math:`t`, with shape :math:`(B)`.
+            kwargs: Optional keyword arguments.
+
+        Returns:
+            The weighted loss
+
+            .. math:: \frac{\alpha_t^2 + \sigma_t^2}{\sigma_t^2} || \mu_\phi(x_t) - x ||^2
+
+            where :math:`x_t \sim p(X_t \mid x)`, with shape :math:`(B, *)`.
+        """
+
+        alpha_t, sigma_t = self.schedule(t)
+
+        while alpha_t.ndim < x.ndim:
+            alpha_t, sigma_t = alpha_t[..., None], sigma_t[..., None]
+
+        z = torch.randn_like(x)
+        x_t = alpha_t * x + sigma_t * z
+
+        q = self(x_t, t, **kwargs)
+
+        w_t = (alpha_t / sigma_t) ** 2 + 1
+
+        loss = w_t * (q.mean - x).square()
+        if self.reduction == "mean":
+            return loss.mean()
+        elif self.reduction == "sum":
+            return loss.sum()
+        elif self.reduction == "none":
+            return loss
+        else:
+            raise ValueError(f"Invalid reduction: {self.reduction}")

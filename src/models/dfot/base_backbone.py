@@ -15,7 +15,6 @@ class BaseBackbone(ABC, nn.Module):
         external_cond_dim: int,
         use_causal_mask=True,
     ):
-
         super().__init__()
 
         self.cfg = cfg

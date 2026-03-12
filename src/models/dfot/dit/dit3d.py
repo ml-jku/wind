@@ -11,7 +11,6 @@ from .dit_base import DiTBase
 
 
 class DiT3D(BaseBackbone):
-
     def __init__(
         self,
         cfg: DictConfig,
@@ -36,9 +35,9 @@ class DiT3D(BaseBackbone):
         hidden_size = cfg.hidden_size
         self.patch_size = cfg.patch_size
         channels, resolution, *_ = x_shape
-        assert (
-            resolution % self.patch_size == 0
-        ), "Resolution must be divisible by patch size."
+        assert resolution % self.patch_size == 0, (
+            "Resolution must be divisible by patch size."
+        )
         self.num_patches = (resolution // self.patch_size) ** 2
         out_channels = self.patch_size**2 * channels
 

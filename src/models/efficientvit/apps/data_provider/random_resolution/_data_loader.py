@@ -359,7 +359,7 @@ class RRSDataLoader(Generic[T_co]):
             self._dataset_kind = _DatasetKind.Map
 
         if sampler is not None and shuffle:
-            raise ValueError("sampler option is mutually exclusive with " "shuffle")
+            raise ValueError("sampler option is mutually exclusive with shuffle")
 
         if batch_sampler is not None:
             # auto_collation with custom batch_sampler
@@ -479,8 +479,9 @@ class RRSDataLoader(Generic[T_co]):
             "persistent_workers",
         ):
             raise ValueError(
-                "{} attribute should not be set after {} is "
-                "initialized".format(attr, self.__class__.__name__)
+                "{} attribute should not be set after {} is initialized".format(
+                    attr, self.__class__.__name__
+                )
             )
 
         super().__setattr__(attr, val)
@@ -1203,7 +1204,9 @@ class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
                 atexit.register(_MultiProcessingDataLoaderIter._clean_up_worker, w)
 
         # .pid can be None only before process is spawned (not the case, so ignore)
-        _utils.signal_handling._set_worker_pids(id(self), tuple(w.pid for w in self._workers))  # type: ignore[misc]
+        _utils.signal_handling._set_worker_pids(
+            id(self), tuple(w.pid for w in self._workers)
+        )  # type: ignore[misc]
         _utils.signal_handling._set_SIGCHLD_handler()
         self._worker_pids_set = True
         self._reset(loader, first_iter=True)
@@ -1285,7 +1288,7 @@ class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
                 # test.
                 # See NOTE [ DataLoader on Linux and open files limit ]
                 fds_limit_margin = 10
-                fs = [tempfile.NamedTemporaryFile() for i in range(fds_limit_margin)]
+                [tempfile.NamedTemporaryFile() for i in range(fds_limit_margin)]
             except OSError as e:
                 if e.errno == errno.EMFILE:
                     raise RuntimeError(

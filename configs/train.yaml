@@ -13,7 +13,6 @@ defaults:
   - hydra: default
   - experiment: null
   - hparams_search: null
-  - optional local: default
   - debug: null
 
 task_name: "train"

@@ -5,7 +5,8 @@ import lightning as L
 import numpy as np
 import torch
 import xarray as xr
-from einops import rearrange, repeat
+import zarr
+from einops import rearrange
 from torch import Tensor
 from torch.utils.data import DataLoader, Dataset
 
@@ -18,8 +19,6 @@ from src.utils.era5 import (
 )
 
 log = RankedLogger(__name__, rank_zero_only=True)
-
-CHUNKS_TO_USE = 8
 
 
 class ERA5Dataset(Dataset):
@@ -40,6 +39,7 @@ class ERA5Dataset(Dataset):
         mean: Tensor = None,
         std: Tensor = None,
         add_day_year_progress: bool = False,
+        time_chunk_size: int = 8,
     ):
         super().__init__()
         self.data_dir = data_dir
@@ -58,6 +58,7 @@ class ERA5Dataset(Dataset):
         self.mean = mean
         self.std = std
         self.add_day_year_progress = add_day_year_progress
+        self.time_chunk_size = time_chunk_size
         self._ds = None  # <- lazy
         log.info(f"Prepared dataset handle for {self.data_dir}")
 
@@ -78,12 +79,19 @@ class ERA5Dataset(Dataset):
         self.len = None
         self.additional_inputs = None
         self._stacked = None
+        self._zarr_var_arrays = None  # list[(zarr.Array, has_level_dim)]
+        self._zarr_time_indices = (
+            None  # int64 array: dataset idx → zarr time axis position
+        )
+        self._time_values = None  # datetime64 array of filtered time steps
 
     # ensure ds is opened in the current process (worker-safe)
     def _ensure_open(self):
         if self._ds is not None:
             return
-        ds = xr.open_zarr(self.data_dir)  # lazy/dask
+        ds = xr.open_zarr(
+            self.data_dir, chunks={"time": self.time_chunk_size}
+        )  # lazy/dask
         # fields with time
         time_vars = []
         for f in self._selected_fields:
@@ -99,7 +107,7 @@ class ERA5Dataset(Dataset):
             raise ValueError("No valid time-dependent fields found in dataset.")
         ds = ds.sel(time=slice(self._timespan[0], self._timespan[1]))
 
-        if self._hours != (0, 6, 12, 18):
+        if set(self._hours) != {0, 6, 12, 18}:
             mask = xr.zeros_like(ds["time"], dtype=bool)
             for h in self._hours:
                 mask = mask | (ds["time"].dt.hour == int(h))
@@ -142,6 +150,36 @@ class ERA5Dataset(Dataset):
         # Save for later use
         self.latitude = ds["latitude"].data
         self.longitude = ds["longitude"].data
+
+        # --- fast path: raw zarr arrays + time index mapping ---
+        # Bypass xarray/dask in __getitem__ to cut per-sample graph overhead.
+        self._time_values = ds["time"].values  # datetime64[ns], filtered
+        # open_consolidated reads .zmetadata once, avoiding GPFS per-array lookups.
+        try:
+            zstore = zarr.open_consolidated(self.data_dir, mode="r")
+        except KeyError:
+            zstore = zarr.open(self.data_dir, mode="r")
+        # Map filtered datetime64 times → integer positions in zarr time axis.
+        zarr_time_hours = zstore["time"][:]  # int64 hours since 1959-01-01
+        epoch = np.datetime64("1959-01-01T00:00", "h")
+        ds_hours = (self._time_values.astype("datetime64[h]") - epoch).astype(np.int64)
+        self._zarr_time_indices = np.searchsorted(zarr_time_hours, ds_hours).astype(
+            np.int64
+        )
+        # Build per-variable zarr array list matching time_vars / all_field_names.
+        self._zarr_var_arrays = [
+            (zstore[f], zstore[f].ndim == 4)  # (array, has_level_dim)
+            for f in self.time_vars
+        ]
+        # Detect if zarr stores spatial dims as (lon, lat) instead of (lat, lon).
+        # WeatherBench 1.5° zarr uses (lon, lat) order; 0.25° uses (lat, lon).
+        _sample_arr = zstore[self.time_vars[0]]
+        _dims = _sample_arr.attrs.get("_ARRAY_DIMENSIONS", [])
+        self._zarr_spatial_transposed = (
+            len(_dims) >= 2 and _dims[-2] == "longitude" and _dims[-1] == "latitude"
+        )
+        if self._zarr_spatial_transposed:
+            log.info("Detected (lon, lat) zarr storage order — will transpose spatial dims.")
         log.info(f"Opened dataset in pid={os.getpid()} with {self.len} samples.")
 
     def __len__(self):
@@ -152,24 +190,33 @@ class ERA5Dataset(Dataset):
         self._ensure_open()
         if self.start_indices is not None:
             idx = self.start_indices[idx]
-        block = self._stacked.isel(
-            time=slice(idx, idx + self._stride * self._n_timesteps, self._stride)
-        ).transpose("time", "channel", "latitude", "longitude", missing_dims="ignore")
-        try:
-            arr = np.asarray(block.data, dtype=np.float32)  # triggers dask compute
-        except Exception as e:
-            # surface the *real* index + dask key that failed
-            raise RuntimeError(f"[VAL-DS] compute failed at base_idx={int(idx)}") from e
-        sample_time = np.asarray(block["time"].values)
+        # Direct zarr reads — avoids per-sample dask graph compilation.
+        t0 = int(self._zarr_time_indices[idx])
+        t_end = t0 + self._stride * self._n_timesteps
+        channels = []
+        for zarr_arr, has_levels in self._zarr_var_arrays:
+            chunk = zarr_arr[t0 : t_end : self._stride]
+            if self._zarr_spatial_transposed:
+                chunk = chunk.swapaxes(-1, -2)  # (..., lon, lat) -> (..., lat, lon)
+            if not has_levels:
+                chunk = chunk[:, np.newaxis, :, :]  # (t, 1, lat, lon)
+            channels.append(chunk)
+        arr = np.concatenate(channels, axis=1).astype(np.float32)  # (t, c, lat, lon)
+        sample_time = self._time_values[
+            idx : idx + self._stride * self._n_timesteps : self._stride
+        ]
         x = torch.from_numpy(arr)
         x = self.preprocess(x)
         if self.add_day_year_progress:
-            seconds_since_epoch = get_seconds_since_epoch(block.time)
+            seconds_since_epoch = get_seconds_since_epoch(sample_time)
             year_progress, day_progress = self._get_day_year_progress(
                 seconds_since_epoch
             )
-            additional_inputs = repeat(
-                self.additional_inputs.float(), "c h w -> t c h w", t=self.n_timesteps
+            # expand() gives a zero-copy view; torch.cat materialises once below.
+            additional_inputs = (
+                self.additional_inputs.float()
+                .unsqueeze(0)
+                .expand(self.n_timesteps, -1, -1, -1)
             )
             additional_inputs = torch.cat(
                 [
@@ -188,44 +235,51 @@ class ERA5Dataset(Dataset):
             "target_fields": x,
             "model_kwargs": {"additional_inputs": additional_inputs},
             "seconds_since_epoch": torch.as_tensor(seconds_since_epoch),
-            "time_s": block["time"].values.astype("datetime64[s]").astype(np.int64),
+            "time_s": sample_time.astype("datetime64[s]").astype(np.int64),
             "idx": idx,
         }
 
     def _get_day_year_progress(self, seconds_since_epoch: torch.Tensor):
-        year_progress = get_year_progress(seconds_since_epoch)
-        year_progress = repeat(
-            year_progress,
-            "t -> t 1 h w",
-            h=self.additional_inputs.shape[1],
-            w=self.additional_inputs.shape[2],
+        H = self.additional_inputs.shape[1]
+        W = self.additional_inputs.shape[2]
+        year_progress = get_year_progress(seconds_since_epoch)  # (t,)
+        # expand() creates a zero-copy view; cat() in the caller materialises once.
+        year_progress = (
+            torch.as_tensor(year_progress).view(-1, 1, 1, 1).expand(-1, 1, H, W)
         )
-        year_progress = torch.as_tensor(year_progress)
-        day_progress = get_day_progress(seconds_since_epoch, self.longitude)
-        day_progress = repeat(
-            day_progress,
-            "t w -> t 1 h w",
-            h=self.additional_inputs.shape[1],
+        day_progress = get_day_progress(seconds_since_epoch, self.longitude)  # (t, w)
+        day_progress = (
+            torch.as_tensor(day_progress).view(-1, 1, 1, W).expand(-1, 1, H, W)
         )
-        day_progress = torch.as_tensor(day_progress)
         return year_progress, day_progress
 
-    def _additional_inputs(self):
-        land_sea_mask = torch.as_tensor(self._ds["land_sea_mask"].to_numpy())
-        land_sea_mask = rearrange(land_sea_mask, "h w -> 1 h w")
-        soil_type = torch.as_tensor(self._ds["soil_type"].to_numpy())
-        soil_type = rearrange(soil_type, "h w -> 1 h w")
-        # geopotential_at_surface needs to be normalized
-        geopotential_at_surface = torch.as_tensor(
-            self._ds["geopotential_at_surface"].to_numpy()
-        )
-        geopotential_at_surface = rearrange(geopotential_at_surface, "h w -> 1 h w")
-        geopotential_at_surface = (
-            geopotential_at_surface - geopotential_at_surface.mean()
-        ) / geopotential_at_surface.std()
+    def _load_static_field(self, name: str, h: int, w: int) -> torch.Tensor:
+        """Load a 2-D static field from the dataset, falling back to zeros if absent."""
+        if name not in self._ds:
+            log.info(f"[WARN] Static field '{name}' not found — using zeros.")
+            return torch.zeros(1, h, w)
+        arr = torch.as_tensor(self._ds[name].to_numpy())
+        if arr.shape[0] < arr.shape[1]:
+            arr = arr.T  # ensure (lat, lon) = (h, w)
+        return rearrange(arr, "w h -> 1 w h")
 
+    def _additional_inputs(self):
         lon = self._ds["longitude"]
         lat = self._ds["latitude"]
+        h, w = lat.size, lon.size
+
+        land_sea_mask = self._load_static_field("land_sea_mask", h, w)
+        soil_type = self._load_static_field("soil_type", h, w)
+
+        # geopotential_at_surface needs to be normalized
+        geopotential_at_surface = self._load_static_field(
+            "geopotential_at_surface", h, w
+        )
+        if geopotential_at_surface.any():
+            geopotential_at_surface = (
+                geopotential_at_surface - geopotential_at_surface.mean()
+            ) / geopotential_at_surface.std()
+
         Lon2D, Lat2D = xr.broadcast(lon, lat)
 
         lonr = np.deg2rad(Lon2D)
@@ -242,9 +296,9 @@ class ERA5Dataset(Dataset):
                 land_sea_mask,
                 soil_type,
                 geopotential_at_surface,
-                rearrange(sinlat, "h w -> 1 h w"),
-                rearrange(coslat_coslon, "h w -> 1 h w"),
-                rearrange(coslat_sinlon, "h w -> 1 h w"),
+                rearrange(sinlat, "w h -> 1 w h"),
+                rearrange(coslat_coslon, "w h -> 1 w h"),
+                rearrange(coslat_sinlon, "w h -> 1 w h"),
             ],
             dim=0,
         )
@@ -289,14 +343,13 @@ class ERA5Dataset(Dataset):
 
         # concatenate all variables along the unified 'channel' axis
         stacked = xr.concat(arrays, dim="channel")  # [time, channel, lat, lon]
-        # Use your global constant 8 (aligned with Zarr disk chunks)
-        # AND force spatial dimensions to be unchunked (-1)
+        # Rechunk so each dask chunk spans a fixed number of timesteps but the
+        # full spatial field — this gives predictable, large sequential reads.
         self._stacked = stacked.chunk(
-            {"time": CHUNKS_TO_USE, "latitude": -1, "longitude": -1}
+            {"time": self.time_chunk_size, "latitude": -1, "longitude": -1}
         )
 
         self.all_field_names = all_field_names
-        self._stacked = stacked  # keep as a lazy Dask-backed array
 
     def preprocess(self, x: torch.Tensor, dim: int = -1) -> torch.Tensor:
         x = torch.as_tensor(x, dtype=torch.float32)
@@ -313,7 +366,9 @@ class ERA5Dataset(Dataset):
         if "total_precipitation_24hr" in self.all_field_names:
             idx_precip = self.all_field_names.index("total_precipitation_24hr")
             x[..., idx_precip, :, :] = torch.log10(x[..., idx_precip, :, :] * 1000 + 1)
-        x = (x - self.mean) / self.std
+        # In-place normalisation avoids a 1.45 GB intermediate allocation at 0.25°.
+        x -= self.mean
+        x /= self.std
         if orig_x_ndim == 4:
             x = x.squeeze(0)
         return x
@@ -367,15 +422,19 @@ class ERA5DataModule(L.LightningDataModule):
         forecast_all: bool = False,
         forecast_all_stride: int = None,
         add_day_year_progress: bool = False,
+        time_chunk_size: int = 8,
     ):
         super().__init__()
         self.save_hyperparameters(logger=False)
         # Check if data_dir_local exists
-        self.data_dir = (
-            data_dir_local
-            if data_dir_local is not None and os.path.exists(data_dir_local)
-            else data_dir_global
-        )
+        if data_dir_local is not None:
+            if os.path.exists(data_dir_local) or data_dir_local.startswith("gs://"):
+                self.data_dir = data_dir_local
+            else:
+                self.data_dir = data_dir_global
+        else:
+            self.data_dir = data_dir_global
+
         all_stats = load_stats(self.hparams.stats_path, self.hparams.fields)
         self.mean = all_stats["mean"]
         self.std = all_stats["std"]
@@ -418,6 +477,7 @@ class ERA5DataModule(L.LightningDataModule):
             mean=self.mean,
             std=self.std,
             add_day_year_progress=self.hparams.add_day_year_progress,
+            time_chunk_size=self.hparams.time_chunk_size,
         )
         if self.hparams.prefetch_factor is None:
             multiprocessing_context = None

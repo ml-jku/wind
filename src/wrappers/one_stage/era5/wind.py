@@ -37,14 +37,16 @@ class Wind(RollingWrapperBase):
         **kwargs,
     ):
         super().__init__(**kwargs)
-        self.area_weights = get_era5_area_weighting()
+        self.area_weights = get_era5_area_weighting(
+            resolution=self.hparams.era5_spatial_resolution
+        )
         self.channel_weights = get_era5_channel_weighting(self.hparams.channel_names)
         self.stats = load_stats(
             self.hparams.stats_path,
             self.hparams.channel_names,
             self.hparams.diff_var_channel_weights,
         )
-        for split in ["val"]:
+        for split in ["val", "test"]:
             self._setup_metrics(split)
         backbone = torch.compile(
             instantiate(self.hparams.backbone),
@@ -84,7 +86,7 @@ class Wind(RollingWrapperBase):
 
     def model_step(self, batch: Dict[str, Tensor]) -> tuple[Dict[str, Tensor], Tensor]:
         x = batch["target_fields"]
-        mask_t = getattr(batch["model_kwargs"], "mask_t", None)
+        mask_t = batch["model_kwargs"].get("mask_t", None)
         noise_dim = self.hparams.independent_noise_dim
 
         t = self.timestep_sampler.sample(x, independent_noise_dim=noise_dim)
@@ -108,27 +110,28 @@ class Wind(RollingWrapperBase):
 
     def _setup_metrics(self, split: str):
         n_spatial_dims = self.hparams.n_spatial_dims
-        setattr(
-            self,
-            f"{split}_crps_time",
-            CRPSTime(n_spatial_dims=n_spatial_dims, weighting=self.area_weights),
+        if not hasattr(self, "crps_time"):
+            self.crps_time = nn.ModuleDict()
+        self.crps_time[split] = CRPSTime(
+            n_spatial_dims=n_spatial_dims, weighting=self.area_weights
         )
-        setattr(
-            self,
-            f"{split}_mse_time",
-            MSETime(n_spatial_dims=n_spatial_dims, weighting=self.area_weights),
+
+        if not hasattr(self, "mse_time"):
+            self.mse_time = nn.ModuleDict()
+        self.mse_time[split] = MSETime(
+            n_spatial_dims=n_spatial_dims, weighting=self.area_weights
         )
 
     def _reset_metrics(self, split):
-        getattr(self, f"{split}_crps_time").reset()
-        getattr(self, f"{split}_mse_time").reset()
+        self.crps_time[split].reset()
+        self.mse_time[split].reset()
 
     def forecast(
         self,
         x: Tensor,
         model_kwargs: Dict[str, Tensor],
         forecast_timesteps: int,
-    ) -> tuple[Tensor | None]:
+    ) -> Tensor:
         all_preds = []
         for _ in range(self.hparams.n_ensembles):
             preds, _ = self.forecast_strategy.sample(
@@ -155,17 +158,16 @@ class Wind(RollingWrapperBase):
             model_kwargs=batch["model_kwargs"],
             forecast_timesteps=forecast_timesteps,
         ).to(self.device)
-        preds = self.trainer.val_dataloaders.dataset.postprocess(preds)[
-            :, :, : self.hparams.n_forecast_timesteps
-        ]
-        targets = self.trainer.val_dataloaders.dataset.postprocess(targets)
+        dataset = getattr(self.trainer, f"{split}_dataloaders").dataset
+        preds = dataset.postprocess(preds)[:, :, : self.hparams.n_forecast_timesteps]
+        targets = dataset.postprocess(targets)
 
-        getattr(self, f"{split}_crps_time").update(preds, targets)
-        getattr(self, f"{split}_mse_time").update(preds.mean(dim=1), targets)
+        self.crps_time[split].update(preds, targets)
+        self.mse_time[split].update(preds.mean(dim=1), targets)
 
     def on_epoch_end(self, split: str):
-        crps_time = getattr(self, f"{split}_crps_time").compute()
-        mse_time = getattr(self, f"{split}_mse_time").compute()
+        crps_time = self.crps_time[split].compute()
+        mse_time = self.mse_time[split].compute()
 
         all_field_names = get_era5_field_names(self.hparams.channel_names)
 

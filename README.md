@@ -14,7 +14,7 @@ This is the official code repository for the paper
 **[WIND: Weather Inverse Diffusion for Zero-Shot Atmospheric Modeling](https://arxiv.org/abs/2602.03924)**.
 
 # News
-
+- **March 12, 2026**: Training code for 0.25° resolution added.
 - **Feb 9, 2026**: Training code released.
 - **Feb 3, 2026**: Paper preprint available on [arXiv](https://arxiv.org/abs/2602.03924).
 
@@ -44,25 +44,27 @@ Supported tasks include:
 Clone the repository and install dependencies using [uv](https://docs.astral.sh/uv/):
 
 ```bash
-git clone https://github.com/<your-org>/wind.git
+git clone https://github.com/ml-jku/wind
 cd wind
 uv sync
-```
-
-To add new dependencies:
-
-```bash
-uv add <package-name>
 ```
 
 # Data
 
 WIND is trained on [ERA5 reanalysis](https://www.ecmwf.int/en/forecasts/dataset/ecmwf-reanalysis-v5) data from the [WeatherBench2](https://weatherbench2.readthedocs.io/en/latest/data-guide.html) benchmark, stored in Zarr format and loaded lazily via xarray/dask.
 
+Two spatial resolutions are supported:
+
+| Resolution | Grid | GCS path |
+|---|---|---|
+| 1.5° (default) | 240 × 121 | `gs://weatherbench2/datasets/era5/1959-2022-6h-240x121_equiangular_with_poles_conservative.zarr` |
+| 0.25° (high-res) | 1440 × 721 | `gs://weatherbench2/datasets/era5/1959-2022-6h-1440x721.zarr` |
+
+Common properties:
+
 | Property | Value |
 |---|---|
 | Time range | 1959–2022, 6-hourly |
-| Spatial resolution | 240 x 121 equiangular grid with poles |
 | Channels | 70 (see below) |
 | Format | Zarr |
 
@@ -85,26 +87,50 @@ Static inputs (land-sea mask, soil type, geopotential at surface, and lat/lon en
 
 ## Data Setup
 
-1. Download the ERA5 dataset in Zarr format from [WeatherBench2](https://weatherbench2.readthedocs.io/en/latest/data-guide.html#era5).
+The ERA5 data is available on Google Cloud Storage via [WeatherBench2](https://console.cloud.google.com/storage/browser/weatherbench2/datasets/era5/). You can either stream it directly from GCS or download it locally.
 
-2. Configure the data path. You have two options:
+### Option A: Stream directly from GCS (no download required)
 
-   - **Local path** (preferred, checked first): set `data_dir_local` in `configs/local/default.yaml`:
+The dataloader uses `xarray.open_zarr` and supports `gs://` paths natively via `gcsfs`. No download needed — data is streamed on the fly:
 
-     ```yaml
-     data:
-       data_dir_local: /path/to/era5.zarr
-     ```
+```bash
+# Install gcsfs for GCS access
+uv add gcsfs
+```
 
-   - **Global fallback path**: set `data_dir` in `configs/paths/era5.yaml`:
+For both resolutions the GCS path is the built-in fallback — no `.env` variable is required unless you want to override it with a local copy.
 
-     ```yaml
-     data_dir: /path/to/era5.zarr
-     ```
+Public GCS access requires no authentication. For faster throughput, run from a GCP instance in `us-central1`.
 
-   The datamodule will use the local path if it exists, otherwise fall back to the global path.
+### Option B: Download locally
 
-3. Normalization statistics are precomputed and included in the repository at `src/datasets/stats/`.
+Download the Zarr dataset from [WeatherBench2 on GCS](https://console.cloud.google.com/storage/browser/weatherbench2/datasets/era5/) using `gsutil`:
+
+```bash
+# 1.5° (~100 GB)
+gsutil -m cp -r gs://weatherbench2/datasets/era5/1959-2022-6h-240x121_equiangular_with_poles_conservative.zarr /path/to/local/
+
+# 0.25° (~7 TB)
+gsutil -m cp -r gs://weatherbench2/datasets/era5/1959-2022-6h-1440x721.zarr /path/to/local/
+```
+
+Then point to the local paths via `.env` (see below).
+
+### Configuring the data path via `.env`
+
+Data paths (and other environment variables) are set in the `.env` file at the project root. Create it in the root folder and edit it:
+
+```bash
+# ERA5 data paths — local path or gs:// URI.
+# If ERA5_1P5DEG_PATH is unset, falls back to the GCS URI in configs/data/era5_1p5deg.yaml.
+# If ERA5_0P25DEG_PATH is unset, falls back to the GCS URI in configs/data/era5_0p25deg.yaml.
+ERA5_1P5DEG_PATH=/path/to/1959-2022-6h-240x121_equiangular_with_poles_conservative.zarr
+ERA5_0P25DEG_PATH=/path/to/1959-2022-6h-1440x721.zarr
+```
+
+For each variable, the datamodule uses the value if the path exists locally or starts with `gs://`, otherwise it falls back to the `data_dir_global` defined in the corresponding config.
+
+Normalization statistics are precomputed and included in the repository at `src/datasets/stats/`.
 
 # Training
 
@@ -113,9 +139,23 @@ Training is managed via [Hydra](https://hydra.cc/) and [PyTorch Lightning](https
 ## Quick Start
 
 ```bash
-# Train with the default 6-hourly experiment config
-python src/train.py experiment=era5/train/6hourly
+# 1.5° resolution (default, ~240×121 grid)
+uv run python src/train.py experiment=era5/train/era5_1p5deg
+
+# 0.25° resolution (high-res, 1440×721 grid — requires more GPU memory)
+uv run python src/train.py experiment=era5/train/era5_0p25deg
 ```
+
+Alternatively, activate the virtual environment first and use `python` directly:
+
+```bash
+source .venv/bin/activate
+python src/train.py experiment=era5/train/era5_1p5deg
+```
+
+### Memory requirements for 0.25°
+
+A single sample at 0.25° is ~1.45 GB (5 timesteps × 70 channels × 1440 × 704 × float32). The default config uses `batch_size=2` and `num_workers=4` — scale down `num_workers` if host RAM is limited (~23 GB in the prefetch queue per GPU at defaults).
 
 ## Overriding Configurations
 
@@ -123,31 +163,36 @@ Hydra allows overriding any configuration parameter from the command line:
 
 ```bash
 # Change batch size and learning rate
-python src/train.py experiment=era5/train/6hourly data.batch_size=16 model.optimizer.lr=1e-4
+uv run python src/train.py experiment=era5/train/era5_1p5deg data.batch_size=16 model.optimizer.lr=1e-4
 
 # Resume from a checkpoint
-python src/train.py experiment=era5/train/6hourly ckpt_path=/path/to/checkpoint.ckpt
+uv run python src/train.py experiment=era5/train/era5_1p5deg ckpt_path=/path/to/checkpoint.ckpt
 
 # Disable Weights & Biases logging
-python src/train.py experiment=era5/train/6hourly logger=[]
+uv run python src/train.py experiment=era5/train/era5_1p5deg logger=[]
 
 # Run in debug mode
-python src/train.py experiment=era5/train/6hourly debug=default
+uv run python src/train.py experiment=era5/train/era5_1p5deg debug=default
 ```
 
 ## Logging
 
 Training is logged to [Weights & Biases](https://wandb.ai/) by default. Configure it in `configs/logger/wandb.yaml` or disable it with `logger=[]`.
 
-W&B and other environment variables are configured in the `.env` file at the project root:
+All environment variables — W&B credentials, data paths, and runtime settings — are configured in the `.env` file at the project root. A minimal setup looks like:
 
 ```bash
+# W&B
 WANDB_ENTITY=<your-wandb-entity>
 WANDB_BASE_URL=https://api.wandb.ai
 WANDB_IGNORE_GLOBS=*.log
+
+# ERA5 data paths (local path or gs:// URI; omit to stream directly from GCS)
+ERA5_1P5DEG_PATH=/path/to/1959-2022-6h-240x121_equiangular_with_poles_conservative.zarr
+ERA5_0P25DEG_PATH=/path/to/1959-2022-6h-1440x721.zarr
 ```
 
-Set `WANDB_ENTITY` to your own W&B team or username.
+Set `WANDB_ENTITY` to your own W&B team or username. 
 
 # Acknowledgments
 

@@ -116,7 +116,6 @@ class MultiStepTransformerV2(nn.Module):
 
 
 class MultiStepTransformerCondV2(nn.Module):
-
     def __init__(
         self,
         depth: int,

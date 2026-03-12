@@ -28,13 +28,11 @@ def gelu(x):
 
 
 class GELU(nn.Module):
-
     def forward(self, x: Tensor) -> Tensor:
         return gelu(x)
 
 
 class sin(nn.Module):
-
     def __call__(self, x: Tensor) -> Tensor:
         return torch.sin(x)
 

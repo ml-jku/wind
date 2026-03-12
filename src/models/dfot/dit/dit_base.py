@@ -168,9 +168,9 @@ class DiTBase(nn.Module):
         if self.num_patches is None:
             return None
         grid_size = int(self.num_patches**0.5)
-        assert (
-            grid_size * grid_size == self.num_patches
-        ), "num_patches must be a square number"
+        assert grid_size * grid_size == self.num_patches, (
+            "num_patches must be a square number"
+        )
         return grid_size
 
     @staticmethod
@@ -186,9 +186,9 @@ class DiTBase(nn.Module):
         }:
             raise ValueError(f"Unknown positional embedding type {pos_emb_type}")
         if num_patches is None:
-            assert (
-                variant == "full"
-            ), "For 1D inputs, factorized variants are not supported"
+            assert variant == "full", (
+                "For 1D inputs, factorized variants are not supported"
+            )
             assert pos_emb_type in {
                 "learned_1d",
                 "sinusoidal_1d",

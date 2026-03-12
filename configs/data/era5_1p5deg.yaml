@@ -1,7 +1,7 @@
 _target_: src.datasets.era5.ERA5DataModule
-data_dir_local: null
-data_dir_global: ${paths.data_dir}
-stats_path: ${paths.stats_path}
+data_dir_local: ${oc.env:ERA5_1P5DEG_PATH,null}
+data_dir_global: gs://weatherbench2/datasets/era5/1959-2022-6h-240x121_equiangular_with_poles_conservative.zarr
+stats_path: ${paths.root_dir}/src/datasets/stats/1959-2022-6h-240x121_equiangular_with_poles_conservative_stats.pkl
 n_timesteps: ${n_timesteps}
 batch_size: 8
 num_workers: 8

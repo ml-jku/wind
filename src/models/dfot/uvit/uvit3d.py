@@ -22,6 +22,7 @@ from ..modules.embeddings import RotaryEmbedding3D
 from .uvit_blocks import (
     AxialRotaryEmbedding,
     EmbedInput,
+    FactorizedTransformerBlock,
     ProjectOutput,
     ResBlock,
     ResBlockWithTemporalAttention,
@@ -403,9 +404,9 @@ class UViT3DV2(BaseBackbone):
         """
         orig_resolution_h = x.shape[3]
         orig_resolution_w = x.shape[4]
-        assert (
-            x.shape[1] == self.temporal_length
-        ), "Temporal length of U-ViT is set to {self.temporal_length}, but input has "
+        assert x.shape[1] == self.temporal_length, (
+            "Temporal length of U-ViT is set to {self.temporal_length}, but input has "
+        )
         f"temporal length {x.shape[1]}."
 
         emb_t = self.t_cond_embedding(t, None)
@@ -469,3 +470,232 @@ class UViT3DV2(BaseBackbone):
             align_corners=False,
         )
         return rearrange(x, "(b t) c h w -> b t c h w", t=self.temporal_length)
+
+
+class UViT3DV3(UViT3DV2):
+    """
+    U-ViT backbone with factorized spatial + temporal attention.
+
+    Identical to UViT3DV2 but adds the "FactorizedTransformerBlock" block type,
+    which replaces full 3D attention (over T*H*W tokens) with alternating:
+      - spatial attention over H*W tokens per timestep, and
+      - temporal attention over T tokens per spatial position.
+
+    Complexity: O(T*(H*W)^2 + H*W*T^2) vs O((T*H*W)^2), making 0.25° resolution
+    tractable. All other block types ("ResBlock", "TransformerBlock", etc.) remain
+    available and can be mixed freely per level.
+
+    FactorizedTransformerBlock levels always use AxialRoPE (ax1=temporal, ax2=spatial),
+    regardless of the global pos_emb_type setting.
+    """
+
+    def __init__(
+        self,
+        cfg: DictConfig,
+        x_shape: torch.Size,
+        additional_inputs: int,
+        max_tokens: int,
+        use_causal_mask=True,
+        remove_noise_cond: bool = False,
+        identity_init: bool = False,
+        init_weights: bool = False,
+        spatial_dims: int = 2,
+        drop_bias: bool = False,
+    ):
+        # ------------------------------- Configuration --------------------------------
+        channels = cfg.channels
+        self.emb_dim = cfg.emb_channels
+        patch_size = cfg.patch_size
+        block_types = cfg.block_types
+        block_dropouts = cfg.block_dropouts
+        num_updown_blocks = cfg.num_updown_blocks
+        num_mid_blocks = cfg.num_mid_blocks
+        num_heads = cfg.num_heads
+        self.pos_emb_type = cfg.pos_emb_type
+        self.num_levels = len(channels)
+        self.resolution_h = x_shape[1]
+        self.resolution_w = x_shape[2]
+
+        _non_transformer_types = {
+            "ResBlock",
+            "ResBlockWithTemporalAttention",
+            "FactorizedTransformerBlock",
+        }
+        self.is_transformers = [bt not in _non_transformer_types for bt in block_types]
+        self.is_factorized = [bt == "FactorizedTransformerBlock" for bt in block_types]
+
+        self.use_checkpointing = list(cfg.use_checkpointing)
+        self.temporal_length = max_tokens
+        self.remove_noise_cond = remove_noise_cond
+        self.identity_init = identity_init
+        self.spatial_dims = spatial_dims
+
+        # ------------------------------ Initialization --------------------------------
+        # Call BaseBackbone.__init__ directly, bypassing UViT3DV2.__init__.
+        BaseBackbone.__init__(self, cfg, x_shape, max_tokens, None, use_causal_mask)
+
+        self.time_in = (
+            nn.Identity()
+            if self.remove_noise_cond
+            else MLPEmbedder(in_dim=self.noise_level_dim, hidden_dim=self.emb_dim)
+        )
+
+        # -------------- Initial downsampling and final upsampling layers --------------
+        self.embed_input = EmbedInput(
+            in_channels=x_shape[0] + additional_inputs,
+            dim=channels[0],
+            patch_size=patch_size,
+        )
+        self.project_output = ProjectOutput(
+            dim=channels[0],
+            out_channels=x_shape[0],
+            patch_size=patch_size,
+        )
+
+        # --------------------------- Positional embeddings ----------------------------
+        assert self.pos_emb_type in [
+            "learned_1d",
+            "rope",
+        ], f"Positional embedding type {self.pos_emb_type} not supported."
+
+        self.pos_embs = nn.ModuleDict({})
+        for i_level, channel in enumerate(channels):
+            if not self.is_transformers[i_level] and not self.is_factorized[i_level]:
+                continue
+            level_resolution_h = self.resolution_h // patch_size // (2**i_level)
+            level_resolution_w = self.resolution_w // patch_size // (2**i_level)
+            sizes = (self.temporal_length, level_resolution_h, level_resolution_w)
+            dim = channel // num_heads
+            if self.is_factorized[i_level]:
+                # Factorized blocks always use AxialRoPE (ax1=T, ax2=H×W).
+                self.pos_embs[f"{i_level}"] = AxialRotaryEmbedding(dim, sizes)
+            elif self.pos_emb_type == "rope":
+                pos_emb_cls = (
+                    RotaryEmbedding3D
+                    if block_types[i_level] == "TransformerBlock"
+                    else AxialRotaryEmbedding
+                )
+                self.pos_embs[f"{i_level}"] = pos_emb_cls(dim, sizes)
+            else:  # learned_1d
+                self.pos_embs[f"{i_level}"] = partial(
+                    SinusoidalPositionalEmbedding, learnable=True
+                )(channel, sizes)
+
+        def _rope_kwargs(i_level: int):
+            if (
+                self.pos_emb_type == "rope" and self.is_transformers[i_level]
+            ) or self.is_factorized[i_level]:
+                return {"rope": self.pos_embs[f"{i_level}"]}
+            return {}
+
+        self.down_blocks = nn.ModuleList()
+        self.up_blocks = nn.ModuleList()
+
+        block_type_to_cls = {
+            "ResBlock": partial(ResBlock, emb_dim=self.emb_dim),
+            "ResBlockWithTemporalAttention": partial(
+                ResBlockWithTemporalAttention,
+                emb_dim=self.emb_dim,
+                temporal_length=self.temporal_length,
+                heads=num_heads,
+            ),
+            "TransformerBlock": partial(
+                TransformerBlock, emb_dim=self.emb_dim, heads=num_heads
+            ),
+            "AxialTransformerBlock": partial(
+                TransformerBlock,
+                emb_dim=self.emb_dim,
+                heads=num_heads,
+                use_axial=True,
+                ax1_len=self.temporal_length,
+            ),
+            "FactorizedTransformerBlock": partial(
+                FactorizedTransformerBlock,
+                emb_dim=self.emb_dim,
+                heads=num_heads,
+                temporal_length=self.temporal_length,
+            ),
+        }
+
+        # ---------------------------- Down-sampling blocks ----------------------------
+        for i_level, (num_blocks, ch, block_type, block_dropout) in enumerate(
+            zip(
+                num_updown_blocks,
+                channels[:-1],
+                block_types[:-1],
+                block_dropouts[:-1],
+            )
+        ):
+            self.down_blocks.append(
+                nn.ModuleList(
+                    [
+                        block_type_to_cls[block_type](
+                            ch, dropout=block_dropout, **_rope_kwargs(i_level)
+                        )
+                        for _ in range(num_blocks)
+                    ]
+                    + [
+                        build_downsample_block(
+                            block_type="ConvPixelUnshuffle",
+                            in_channels=ch,
+                            out_channels=channels[i_level + 1],
+                            shortcut="averaging",
+                        )
+                    ],
+                )
+            )
+
+        # ------------------------------ Middle blocks ---------------------------------
+        self.mid_blocks = nn.ModuleList(
+            [
+                block_type_to_cls[block_types[-1]](
+                    channels[-1],
+                    dropout=block_dropouts[-1],
+                    **_rope_kwargs(self.num_levels - 1),
+                )
+                for _ in range(num_mid_blocks)
+            ]
+        )
+
+        # ---------------------------- Up-sampling blocks ------------------------------
+        for _i_level, (num_blocks, ch, block_type, block_dropout) in enumerate(
+            zip(
+                reversed(num_updown_blocks),
+                reversed(channels[:-1]),
+                reversed(block_types[:-1]),
+                reversed(block_dropouts[:-1]),
+            )
+        ):
+            i_level = self.num_levels - 2 - _i_level
+            self.up_blocks.append(
+                nn.ModuleList(
+                    [
+                        build_upsample_block(
+                            block_type="ConvPixelShuffle",
+                            in_channels=channels[i_level + 1],
+                            out_channels=ch,
+                            shortcut="duplicating",
+                        )
+                    ]
+                    + [
+                        block_type_to_cls[block_type](
+                            ch,
+                            dropout=block_dropout,
+                            **_rope_kwargs(i_level),
+                        )
+                        for _ in range(num_blocks)
+                    ]
+                )
+            )
+
+        if init_weights:
+            self.apply(self._init_weights)
+
+        if self.remove_noise_cond:
+            self.learned_noise_cond = nn.Parameter(
+                torch.randn(1, 1, self.noise_level_emb_dim),
+                requires_grad=True,
+            )
+
+        if drop_bias:
+            zero_bias(self)

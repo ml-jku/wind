@@ -2,7 +2,7 @@ from math import ceil
 from typing import List
 
 import torch
-from torch import Tensor
+from torch import Tensor, nn
 
 
 def expand_like(a: Tensor, b: Tensor, dim_insert_pos: int = -1) -> Tensor:
@@ -77,3 +77,24 @@ def extract_frames(
         return prediction.clone().detach()
     else:
         return prediction[:, overlap:].clone().detach()
+
+
+def get_module_dtype(module: nn.Module) -> torch.dtype:
+    r"""Returns the data type of a module.
+
+    The module's data type is the first floating-point type in the module's parameters
+    or buffers. If there is none, returns :py:`None`.
+
+    Arguments:
+        module: A module.
+    """
+
+    for p in module.parameters():
+        if torch.is_floating_point(p):
+            return p.dtype
+
+    for b in module.buffers():
+        if torch.is_floating_point(b):
+            return b.dtype
+
+    return None

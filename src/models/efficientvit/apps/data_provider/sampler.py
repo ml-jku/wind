@@ -50,8 +50,7 @@ class DistributedRangedSampler(Sampler):
                     :padding_size
                 ]
             indices = indices[
-                self.rank
-                * self.num_samples_per_rank : (self.rank + 1)
+                self.rank * self.num_samples_per_rank : (self.rank + 1)
                 * self.num_samples_per_rank
             ]
             assert len(indices) == self.num_samples_per_rank
