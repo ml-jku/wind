@@ -14,6 +14,7 @@ This is the official code repository for the paper
 **[WIND: Weather Inverse Diffusion for Zero-Shot Atmospheric Modeling](https://arxiv.org/abs/2602.03924)**.
 
 # News
+- **May 1, 2026**: Paper was accepted at ICML 2026 🎉
 - **March 12, 2026**: Training code for 0.25° resolution added.
 - **Feb 9, 2026**: Training code released.
 - **Feb 3, 2026**: Paper preprint available on [arXiv](https://arxiv.org/abs/2602.03924).

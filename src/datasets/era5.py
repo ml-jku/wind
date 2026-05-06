@@ -135,7 +135,10 @@ class ERA5Dataset(Dataset):
         else:
             if self.n_forecasts is not None:
                 self.start_indices = np.linspace(
-                    0, len(ds.time) - self._n_timesteps, self.n_forecasts, dtype=int
+                    0,
+                    len(ds.time) - self._stride * self._n_timesteps,
+                    self.n_forecasts,
+                    dtype=int,
                 )
                 self.len = len(self.start_indices)
             else:
@@ -179,7 +182,9 @@ class ERA5Dataset(Dataset):
             len(_dims) >= 2 and _dims[-2] == "longitude" and _dims[-1] == "latitude"
         )
         if self._zarr_spatial_transposed:
-            log.info("Detected (lon, lat) zarr storage order — will transpose spatial dims.")
+            log.info(
+                "Detected (lon, lat) zarr storage order — will transpose spatial dims."
+            )
         log.info(f"Opened dataset in pid={os.getpid()} with {self.len} samples.")
 
     def __len__(self):
@@ -409,9 +414,11 @@ class ERA5DataModule(L.LightningDataModule):
         stride_val: int = 1,
         batch_size: int = 16,
         num_workers: int = 8,
+        num_workers_val: int = None,
         persistent_workers: bool = True,
         pin_memory: bool = True,
         prefetch_factor: int = 2,
+        prefetch_factor_val: int = None,
         drop_last: bool = False,
         shuffle: bool = False,
         seed: int = 42,
@@ -455,7 +462,7 @@ class ERA5DataModule(L.LightningDataModule):
             hours = self.hparams.hours_val
             stride = self.hparams.stride_val
             shuffle = False
-            drop_last = self.hparams.drop_last
+            drop_last = True
             n_forecasts = self.hparams.n_forecasts
             forecast_all = self.hparams.forecast_all
             timespan = self.hparams.timespan_val
@@ -479,7 +486,15 @@ class ERA5DataModule(L.LightningDataModule):
             add_day_year_progress=self.hparams.add_day_year_progress,
             time_chunk_size=self.hparams.time_chunk_size,
         )
-        if self.hparams.prefetch_factor is None:
+        if mode in ["val", "test"]:
+            num_workers = self.hparams.num_workers_val or self.hparams.num_workers
+            prefetch_factor = (
+                self.hparams.prefetch_factor_val or self.hparams.prefetch_factor
+            )
+        else:
+            num_workers = self.hparams.num_workers
+            prefetch_factor = self.hparams.prefetch_factor
+        if prefetch_factor is None:
             multiprocessing_context = None
         else:
             multiprocessing_context = "spawn"
@@ -487,11 +502,11 @@ class ERA5DataModule(L.LightningDataModule):
             dataset,
             batch_size=self.hparams.batch_size,
             shuffle=shuffle,
-            num_workers=self.hparams.num_workers,
+            num_workers=num_workers,
             pin_memory=self.hparams.pin_memory,
             drop_last=drop_last,
             persistent_workers=self.hparams.persistent_workers,
-            prefetch_factor=self.hparams.prefetch_factor,
+            prefetch_factor=prefetch_factor,
             multiprocessing_context=multiprocessing_context,
         )
 

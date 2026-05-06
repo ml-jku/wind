@@ -54,22 +54,11 @@ forecast_strategy:
     _partial_: True
     steps: 15
 
-# optimizer:
-#   _target_: heavyball.ForeachAdamW
-#   _partial_: True
-#   lr: 5e-5
-#   weight_decay: 0.0
-
 optimizer:
-  _target_: src.utils.optimizer.MuonWithAdamW
+  _target_: heavyball.ForeachAdamW
   _partial_: True
-  adam_betas: [0.9,0.95]
-  adam_weight_decay: 0
-  lr: 0.01
-  lr_ratio: 0.015
-  muon_momentum: 0.95
-  muon_nesterov: True
-  ns_steps: 5
+  lr: 1e-4
+  weight_decay: 0.0
 
 ema:
   _target_: src.modules.ema.ExponentialMovingAverage

@@ -7,8 +7,8 @@ n_timesteps: 5
 n_forecast_timesteps: 5
 n_spatial_dims: 2
 field_channels: 70
-timespan_train: ["1959-01-01", "2020-12-31"]
-timespan_val: ["2021-01-01", "2021-12-31"]
+timespan_train: ["1979-01-01", "2019-12-31"]
+timespan_val: ["2020-01-01", "2020-12-31"]
 n_ensembles: 5
 
 noise_distribution:
@@ -25,7 +25,7 @@ tags: []
 
 trainer:
   max_epochs: 60
-  num_sanity_val_steps: 0
+  num_sanity_val_steps: 1
   log_every_n_steps: 15
   check_val_every_n_epoch: 2
   gradient_clip_val: 0.8

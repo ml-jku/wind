@@ -126,8 +126,8 @@ class InpaintDenoiser(Denoiser):
         Manually update the context.
         Crucial: we move the input to the device of the existing buffer.
         """
-        self.y = torch.as_tensor(y).to(self.y.device)
-        self.mask = torch.as_tensor(mask).to(self.mask.device)
+        self.y = torch.as_tensor(y).to(y.device)
+        self.mask = torch.as_tensor(mask).to(mask.device)
 
     @property
     def schedule(self):
