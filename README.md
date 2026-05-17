@@ -21,8 +21,8 @@ This is the official code repository for the paper
 
 # Overview
 
-WIND is a single pre-trained foundation model for weather and climate modeling
-that replaces specialized baselines across a wide range of tasks without any task-specific fine-tuning.
+WIND is a pre-trained foundation model for weather and climate modeling
+that rivals specialized baselines across a wide range of tasks without task-specific fine-tuning.
 It learns a task-agnostic prior of the atmosphere via a self-supervised video reconstruction objective using an unconditional video diffusion model.
 At inference, diverse domain-specific problems are framed as inverse problems and solved via posterior sampling.
 
@@ -30,8 +30,8 @@ Supported tasks include:
 - Probabilistic ensemble forecasting
 - Spatial and temporal downscaling
 - Sparse reconstruction
-- Enforcing conservation laws
-- Counterfactual storylines of extreme weather events under global warming scenarios
+- Enforcing global conservation laws
+- Counterfactual forecast of extreme weather events under pseudo global warming pertubations
 
 # Installation
 
