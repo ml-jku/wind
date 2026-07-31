@@ -14,6 +14,7 @@ This is the official code repository for the paper
 **[WIND: Weather Inverse Diffusion for Zero-Shot Atmospheric Modeling](https://arxiv.org/abs/2602.03924)**.
 
 # News
+- **July 31, 2026**: Added a [spatial downscaling notebook](notebooks/spatial_downscaling_demo.ipynb) demonstrating inference from a pre-trained checkpoint. Download the 1.5° checkpoint [here](https://ml.jku.at/research/WIND/downloads/wind_1p5deg.ckpt).
 - **May 1, 2026**: Paper was accepted at ICML 2026 🎉
 - **March 12, 2026**: Training code for 0.25° resolution added.
 - **Feb 9, 2026**: Training code released.
